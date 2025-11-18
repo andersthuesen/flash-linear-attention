@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 @torch.compile
 def elu_p1(x):
-    return (F.elu(x, 1., False) + 1.).to(x)
+    return (F.elu(x, 1.0, False) + 1.0).to(x)
 
 
 @torch.compile
@@ -92,7 +92,7 @@ class GatedDeltaNet(nn.Module):
         head_dim: int = 256,
         num_heads: int = 6,
         num_v_heads: int = None,
-        mode: str = 'chunk',
+        mode: str = "chunk",
         use_gate: bool = True,
         use_short_conv: bool = True,
         allow_neg_eigval: bool = False,
@@ -140,7 +140,7 @@ class GatedDeltaNet(nn.Module):
                 f"expand_v={expand_v} does not produce an integer value when multiplied by head_dim={head_dim}. "
                 f"Resulting head_v_dim would be {head_dim * expand_v}, which is invalid for FusedRMSNormGated.",
             )
-        assert mode in ['chunk', 'fused_recurrent'], f"Not supported mode `{mode}`."
+        assert mode in ["chunk", "fused_recurrent"], f"Not supported mode `{mode}`."
 
         self.q_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
         self.k_proj = nn.Linear(hidden_size, self.key_dim, bias=False)
@@ -156,8 +156,7 @@ class GatedDeltaNet(nn.Module):
         dt_max = 0.1
         dt_init_floor = 1e-4
         dt = torch.exp(
-            torch.rand(self.num_v_heads) * (math.log(dt_max) - math.log(dt_min))
-            + math.log(dt_min),
+            torch.rand(self.num_v_heads) * (math.log(dt_max) - math.log(dt_min)) + math.log(dt_min),
         )
         dt = torch.clamp(dt, min=dt_init_floor)
         # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
@@ -173,19 +172,19 @@ class GatedDeltaNet(nn.Module):
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
             self.k_conv1d = ShortConvolution(
                 hidden_size=self.key_dim,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
             self.v_conv1d = ShortConvolution(
                 hidden_size=self.value_dim,
                 kernel_size=conv_size,
                 bias=conv_bias,
-                activation='silu',
+                activation="silu",
             )
         else:
             warnings.warn(
@@ -217,15 +216,13 @@ class GatedDeltaNet(nn.Module):
 
         batch_size, q_len, _ = hidden_states.shape
         # change to inference mode.
-        mode = 'fused_recurrent' if (q_len <= 64 and not self.training) else self.mode
-        if self.training:
-            assert mode == 'chunk', "Only chunk mode is supported in training."
+        mode = "fused_recurrent" if (q_len <= 64 and not self.training) else self.mode
 
         last_state = None
         if past_key_values is not None and len(past_key_values) > self.layer_idx:
             last_state = past_key_values[self.layer_idx]
 
-        cu_seqlens = kwargs.get('cu_seqlens')
+        cu_seqlens = kwargs.get("cu_seqlens")
         if attention_mask is not None:
             indices, cu_seqlens, _ = get_unpad_data(attention_mask[:, -q_len:])
             hidden_states = index_first_axis(rearrange(hidden_states, "b s ... -> (b s) ..."), indices).unsqueeze(0)
@@ -233,7 +230,7 @@ class GatedDeltaNet(nn.Module):
         if self.use_short_conv:
             conv_state_q, conv_state_k, conv_state_v = None, None, None
             if last_state is not None:
-                conv_state_q, conv_state_k, conv_state_v = last_state['conv_state']
+                conv_state_q, conv_state_k, conv_state_v = last_state["conv_state"]
             q, conv_state_q = self.q_conv1d(
                 x=self.q_proj(hidden_states),
                 cache=conv_state_q,
@@ -257,20 +254,20 @@ class GatedDeltaNet(nn.Module):
             k = F.silu(self.k_proj(hidden_states))
             v = F.silu(self.v_proj(hidden_states))
 
-        q, k = map(lambda x: rearrange(x, '... (h d) -> ... h d', d=self.head_k_dim), (q, k))
-        v = rearrange(v, '... (h d) -> ... h d', d=self.head_v_dim)
+        q, k = map(lambda x: rearrange(x, "... (h d) -> ... h d", d=self.head_k_dim), (q, k))
+        v = rearrange(v, "... (h d) -> ... h d", d=self.head_v_dim)
 
         if self.num_v_heads > self.num_heads:
-            q, k = map(lambda x: repeat(x, '... h d -> ... (h g) d', g=self.num_v_heads // self.num_heads), (q, k))
+            q, k = map(lambda x: repeat(x, "... h d -> ... (h g) d", g=self.num_v_heads // self.num_heads), (q, k))
 
         beta = self.b_proj(hidden_states).sigmoid()
         if self.allow_neg_eigval:
-            beta = beta * 2.
+            beta = beta * 2.0
 
         g = -self.A_log.float().exp() * F.softplus(self.a_proj(hidden_states).float() + self.dt_bias)
 
-        recurrent_state = last_state['recurrent_state'] if last_state is not None else None
-        if mode == 'chunk':
+        recurrent_state = last_state["recurrent_state"] if last_state is not None else None
+        if mode == "chunk":
             o, recurrent_state = chunk_gated_delta_rule(
                 q=q,
                 k=k,
@@ -282,7 +279,7 @@ class GatedDeltaNet(nn.Module):
                 cu_seqlens=cu_seqlens,
                 use_qk_l2norm_in_kernel=True,
             )
-        elif mode == 'fused_recurrent':
+        elif mode == "fused_recurrent":
             o, recurrent_state = fused_recurrent_gated_delta_rule(
                 q=q,
                 k=k,
@@ -306,11 +303,11 @@ class GatedDeltaNet(nn.Module):
             )
 
         if self.use_gate:
-            g = rearrange(self.g_proj(hidden_states), '... (h d) -> ... h d', d=self.head_v_dim)
+            g = rearrange(self.g_proj(hidden_states), "... (h d) -> ... h d", d=self.head_v_dim)
             o = self.o_norm(o, g)
         else:
             o = self.o_norm(o)
-        o = rearrange(o, 'b t h d -> b t (h d)')
+        o = rearrange(o, "b t h d -> b t (h d)")
         o = self.o_proj(o)
         if attention_mask is not None:
             o = pad_input(o.squeeze(0), indices, batch_size, q_len)

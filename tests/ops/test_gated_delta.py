@@ -1,4 +1,3 @@
-
 import os
 
 import pytest
@@ -38,7 +37,7 @@ def recurrent_gated_delta_rule_ref(
         b_v = b_v - (h.clone() * b_k[..., None]).sum(-2)
         b_v = b_v * b_beta[..., None]
         h = h.clone() + b_k.unsqueeze(-1) * b_v.unsqueeze(-2)
-        o[:, :, i] = torch.einsum('bhd,bhdm->bhm', b_q, h)
+        o[:, :, i] = torch.einsum("bhd,bhdm->bhm", b_q, h)
     if not output_final_state:
         h = None
     o = o.transpose(1, 2).contiguous()
@@ -83,7 +82,7 @@ def chunk_gated_delta_rule_ref(
     # note that diagonal is masked.
     mask = torch.triu(torch.ones(chunk_size, chunk_size, dtype=torch.bool, device=q.device), diagonal=0)
     q, k, v, k_beta, decay = map(
-        lambda x: rearrange(x, 'b h (n c) d -> b h n c d', c=chunk_size),
+        lambda x: rearrange(x, "b h (n c) d -> b h n c d", c=chunk_size),
         [q, k, v, k_beta, decay.unsqueeze(-1)],
     )
     decay = decay.squeeze(-1).cumsum(-1)
@@ -109,19 +108,21 @@ def chunk_gated_delta_rule_ref(
         v_new = v_i - v_prime
         o_inter = (q_i * decay[:, :, i, :, None].exp()) @ S
         o[:, :, i] = o_inter + attn @ v_new
-        S = S * decay[:, :, i, -1, None, None].exp() + (k_i * (decay[:, :, i, -1, None] - decay[:, :, i]).exp()
-                                                        [..., None]).transpose(-1, -2) @ v_new
+        S = (
+            S * decay[:, :, i, -1, None, None].exp()
+            + (k_i * (decay[:, :, i, -1, None] - decay[:, :, i]).exp()[..., None]).transpose(-1, -2) @ v_new
+        )
     if not output_final_state:
         S = None
     # unpad
-    o = rearrange(o, 'b h n c d -> b h (n c) d')
+    o = rearrange(o, "b h n c d -> b h (n c) d")
     o = o[:, :, :T]
     o = o.transpose(1, 2)
     return o, S
 
 
 @pytest.mark.parametrize(
-    ('B', 'T', 'H', 'HV', 'D', 'scale', 'gate_logit_normalizer', 'dtype'),
+    ("B", "T", "H", "HV", "D", "scale", "gate_logit_normalizer", "dtype"),
     [
         pytest.param(*test, id="B{}-T{}-H{}-HV{}-D{}-scale{}-gate_logit_normalizer{}-{}".format(*test))
         for test in [
@@ -156,8 +157,8 @@ def test_fused_recurrent(
     h0 = torch.randn(B, HV, D, D, dtype=torch.float32)
     q, k, v, beta, g, h0 = map(lambda x: x.to(device).requires_grad_(), (q, k, v, beta, g, h0))
     ref, ref_ht = recurrent_gated_delta_rule_ref(
-        q=F.normalize(repeat(q.clone(), 'b t h d -> b t (h g) d', g=HV // H), p=2, dim=-1).to(dtype),
-        k=F.normalize(repeat(k.clone(), 'b t h d -> b t (h g) d', g=HV // H), p=2, dim=-1).to(dtype),
+        q=F.normalize(repeat(q.clone(), "b t h d -> b t (h g) d", g=HV // H), p=2, dim=-1).to(dtype),
+        k=F.normalize(repeat(k.clone(), "b t h d -> b t (h g) d", g=HV // H), p=2, dim=-1).to(dtype),
         v=v.clone(),
         beta=beta.clone(),
         g=g.clone(),
@@ -176,12 +177,12 @@ def test_fused_recurrent(
         use_qk_l2norm_in_kernel=True,
         output_final_state=True,
     )
-    assert_close('o', ref, tri, 0.002)
-    assert_close('ht', ref_ht, tri_ht, 0.002)
+    assert_close("o", ref, tri, 0.002)
+    assert_close("ht", ref_ht, tri_ht, 0.002)
 
 
 @pytest.mark.parametrize(
-    ('B', 'T', 'H', 'D', 'scale', 'gate_logit_normalizer', 'mask_p', 'use_qk_l2norm_in_kernel', 'dtype'),
+    ("B", "T", "H", "D", "scale", "gate_logit_normalizer", "mask_p", "use_qk_l2norm_in_kernel", "dtype"),
     [
         pytest.param(
             *test,
@@ -212,7 +213,7 @@ def test_chunk(
 ):
     torch.manual_seed(42)
     if is_intel_alchemist and D > 128:
-        pytest.skip(reason='chunk_gated_delta_rule is not supported on alchemist for D>128')
+        pytest.skip(reason="chunk_gated_delta_rule is not supported on alchemist for D>128")
 
     q = torch.rand(B, T, H, D, dtype=dtype)
     k = torch.rand(B, T, H, D, dtype=dtype)
@@ -254,18 +255,18 @@ def test_chunk(
 
     ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
     ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dg, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, g.grad, h0.grad
-    assert_close('o', ref, tri, 0.005)
-    assert_close('ht', ref_ht, tri_ht, 0.005)
-    assert_close('dq', ref_dq, tri_dq, 0.008)
-    assert_close('dk', ref_dk, tri_dk, 0.008)
-    assert_close('dv', ref_dv, tri_dv, 0.008)
-    assert_close('db', ref_dbeta, tri_dbeta, 0.02)
-    assert_close('dg', ref_dg, tri_dg, 0.02)
-    assert_close('dh0', ref_dh0, tri_dh0, 0.008)
+    assert_close("o", ref, tri, 0.005)
+    assert_close("ht", ref_ht, tri_ht, 0.005)
+    assert_close("dq", ref_dq, tri_dq, 0.008)
+    assert_close("dk", ref_dk, tri_dk, 0.008)
+    assert_close("dv", ref_dv, tri_dv, 0.008)
+    assert_close("db", ref_dbeta, tri_dbeta, 0.02)
+    assert_close("dg", ref_dg, tri_dg, 0.02)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.008)
 
 
 @pytest.mark.parametrize(
-    ('H', 'D', 'mask_p', 'cu_seqlens', 'dtype'),
+    ("H", "D", "mask_p", "cu_seqlens", "dtype"),
     [
         pytest.param(*test, id="H{}-D{}-mask_p{}-cu_seqlens{}-{}".format(*test))
         for test in [
@@ -277,8 +278,8 @@ def test_chunk(
     ],
 )
 @pytest.mark.skipif(
-    os.getenv('SKIP_TEST_CHUNK_VARLEN') == '1',
-    reason='Skipping test_chunk_varlen because SKIP_TEST_CHUNK_VARLEN is set',
+    os.getenv("SKIP_TEST_CHUNK_VARLEN") == "1",
+    reason="Skipping test_chunk_varlen because SKIP_TEST_CHUNK_VARLEN is set",
 )
 def test_chunk_varlen(
     H: int,
@@ -288,9 +289,9 @@ def test_chunk_varlen(
     dtype: torch.dtype,
 ):
     if is_intel_alchemist and D > 128:
-        pytest.skip(reason='chunk_gated_delta_rule is not supported on alchemist for D>128')
+        pytest.skip(reason="chunk_gated_delta_rule is not supported on alchemist for D>128")
     torch.manual_seed(42)
-    os.environ['TRITON_F32_DEFAULT'] = 'ieee'
+    os.environ["TRITON_F32_DEFAULT"] = "ieee"
     # randomly split the sequence into N segments
     cu_seqlens = torch.LongTensor(cu_seqlens).to(device)
     T = cu_seqlens[-1]
@@ -327,11 +328,11 @@ def test_chunk_varlen(
     ref_ht = []
     for i in range(N):
         ref_i, ref_ht_i = recurrent_gated_delta_rule_ref(
-            q=q[:, cu_seqlens[i]:cu_seqlens[i+1]],
-            k=k[:, cu_seqlens[i]:cu_seqlens[i+1]],
-            v=v[:, cu_seqlens[i]:cu_seqlens[i+1]],
-            beta=beta[:, cu_seqlens[i]:cu_seqlens[i+1]],
-            g=g[:, cu_seqlens[i]:cu_seqlens[i+1]],
+            q=q[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            k=k[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            v=v[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            beta=beta[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            g=g[:, cu_seqlens[i] : cu_seqlens[i + 1]],
             initial_state=h0[i],
             output_final_state=True,
         )
@@ -343,11 +344,100 @@ def test_chunk_varlen(
     ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
     ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dg, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, g.grad, h0.grad
 
-    assert_close('o', ref, tri, 0.005)
-    assert_close('ht', ref_ht, tri_ht, 0.005)
-    assert_close('dq', ref_dq, tri_dq, 0.007)
-    assert_close('dk', ref_dk, tri_dk, 0.008)
-    assert_close('dv', ref_dv, tri_dv, 0.007)
-    assert_close('db', ref_dbeta, tri_dbeta, 0.015)
-    assert_close('dg', ref_dg, tri_dg, 0.015)
-    assert_close('dh0', ref_dh0, tri_dh0, 0.007)
+    assert_close("o", ref, tri, 0.005)
+    assert_close("ht", ref_ht, tri_ht, 0.005)
+    assert_close("dq", ref_dq, tri_dq, 0.007)
+    assert_close("dk", ref_dk, tri_dk, 0.008)
+    assert_close("dv", ref_dv, tri_dv, 0.007)
+    assert_close("db", ref_dbeta, tri_dbeta, 0.015)
+    assert_close("dg", ref_dg, tri_dg, 0.015)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.007)
+
+
+@pytest.mark.parametrize(
+    ("H", "D", "mask_p", "cu_seqlens", "dtype"),
+    [
+        pytest.param(*test, id="fused_varlen-H{}-D{}-mask_p{}-cu_seqlens{}-{}".format(*test))
+        for test in [
+            (4, 60, 0, [0, 15], torch.float16),
+            (4, 64, 0, [0, 256, 500, 1000], torch.float16),
+            (4, 64, 0.5, [0, 256, 500, 1000], torch.float16),
+            (4, 100, 0, [0, 15, 100, 300, 1200, 2000], torch.float16),
+        ]
+    ],
+)
+def test_fused_recurrent_varlen(
+    H: int,
+    D: int,
+    mask_p: float,
+    cu_seqlens: list[int],
+    dtype: torch.dtype,
+):
+    torch.manual_seed(42)
+    os.environ["TRITON_F32_DEFAULT"] = "ieee"
+    # randomly split the sequence into N segments
+    cu_seqlens = torch.LongTensor(cu_seqlens).to(device)
+    T = cu_seqlens[-1]
+    N = len(cu_seqlens) - 1
+
+    # seq-first required for inputs with variable lengths
+    # we set HV = H here (single "value head" group)
+    q = torch.randn((1, T, H, D), dtype=dtype)
+    k = F.normalize(torch.randn(1, T, H, D, dtype=torch.float32), p=2, dim=-1).to(dtype)
+    v = torch.randn((1, T, H, D), dtype=dtype)
+    g = F.logsigmoid(torch.rand(1, T, H, dtype=dtype))
+    g = g * (torch.rand_like(g) > mask_p)
+    beta = torch.rand(1, T, H, dtype=dtype).sigmoid()
+    # initial state per segment: [N, HV, K, V] with HV = H and K = V = D
+    h0 = torch.randn((N, H, D, D), dtype=dtype)
+
+    q, k, v, beta, g, h0 = map(lambda x: x.to(device).requires_grad_(), (q, k, v, beta, g, h0))
+    do = torch.randn_like(v)
+    dht = torch.rand_like(h0)
+
+    # fused recurrent varlen (Triton)
+    tri, tri_ht = fused_recurrent_gated_delta_rule(
+        q=q.clone(),
+        k=k.clone(),
+        v=v.clone(),
+        beta=beta.clone(),
+        g=g.clone(),
+        initial_state=h0.clone(),
+        output_final_state=True,
+        use_qk_l2norm_in_kernel=False,
+        cu_seqlens=cu_seqlens,
+    )
+    ((tri * do).sum() + (tri_ht * dht).sum()).backward(retain_graph=True)
+    tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dg, tri_dh0 = q.grad, k.grad, v.grad, beta.grad, g.grad, h0.grad
+    q.grad = k.grad = v.grad = beta.grad = g.grad = h0.grad = None
+
+    # reference: run recurrent_gated_delta_rule_ref on each segment separately
+    ref = []
+    ref_ht = []
+    for i in range(N):
+        ref_i, ref_ht_i = recurrent_gated_delta_rule_ref(
+            q=q[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            k=k[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            v=v[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            beta=beta[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            g=g[:, cu_seqlens[i] : cu_seqlens[i + 1]],
+            initial_state=h0[i],
+            output_final_state=True,
+        )
+        ref.append(ref_i)
+        ref_ht.append(ref_ht_i)
+    ref = torch.cat(ref, 1)
+    ref_ht = torch.cat(ref_ht, 0)
+
+    ((ref * do).sum() + (ref_ht * dht).sum()).backward(retain_graph=True)
+    ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dg, ref_dh0 = q.grad, k.grad, v.grad, beta.grad, g.grad, h0.grad
+
+    # forward & backward checks – tolerances similar to chunk_varlen
+    assert_close("o", ref, tri, 0.005)
+    assert_close("ht", ref_ht, tri_ht, 0.005)
+    assert_close("dq", ref_dq, tri_dq, 0.007)
+    assert_close("dk", ref_dk, tri_dk, 0.008)
+    assert_close("dv", ref_dv, tri_dv, 0.007)
+    assert_close("db", ref_dbeta, tri_dbeta, 0.015)
+    assert_close("dg", ref_dg, tri_dg, 0.015)
+    assert_close("dh0", ref_dh0, tri_dh0, 0.007)
